@@ -22,9 +22,20 @@ async function commitToGitHub(payload) {
   }
 
   // Sanitize filename and format path: e.g., LeetCode/0001_Two_Sum.cpp
-  const safeNumber = problemNumber.toString().padStart(4, "0");
+  // const safeNumber = problemNumber.toString().padStart(4, "0");
+  let fileName = "";
   const safeTitle = problemTitle.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const fileName = `${safeNumber}_${safeTitle}.${languageExtension}`;
+
+  if (problemNumber && problemNumber.trim()) {
+    let formattedNumber = problemNumber.toString().trim();
+    if (/^\d+$/.test(formattedNumber)) {
+      formattedNumber = formattedNumber.padStart(4, "0");
+    }
+    fileName = `${formattedNumber}_${safeTitle}.${languageExtension}`;
+  } else {
+    fileName = `${safeTitle}.${languageExtension}`;
+  }
+
   const filePath = `${platform}/${fileName}`;
   const commitMessage = `Solve [${platform}] ${problemNumber}: ${problemTitle}`;
 

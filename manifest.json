@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "CodeSync Tracker",
-  "version": "1.0",
+  "version": "1.1",
   "description": "Auto-commits accepted solutions to my private GitHub tracker.",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
     "https://api.github.com/*",
-    "https://leetcode.com/*"
+    "https://leetcode.com/*",
+    "https://*.geeksforgeeks.org/*"
   ],
   "action": {
     "default_popup": "popup.html"
@@ -20,6 +21,14 @@
     {
       "matches": ["https://leetcode.com/problems/*"],
       "js": ["leetcode.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.geeksforgeeks.org/problems/*",
+        "https://practice.geeksforgeeks.org/problems/*"
+      ],
+      "js": ["gfg.js"],
       "run_at": "document_idle"
     }
   ]
