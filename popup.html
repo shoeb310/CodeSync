@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 260px;
+      padding: 12px;
+      font-family: Arial, sans-serif;
+      font-size: 14px;
+      margin: 0;
+    }
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    input[type="text"], input[type="password"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 6px;
+      margin-top: 4px;
+      margin-bottom: 8px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button {
+      width: 100%;
+      padding: 8px;
+      background-color: #2da44e;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    button:hover {
+      background-color: #2c974b;
+    }
+    #status {
+      margin-top: 8px;
+      font-size: 12px;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="toggle-container">
+    <span><strong>Auto-Sync</strong></span>
+    <input type="checkbox" id="syncToggle">
+  </div>
+  
+  <label for="ghToken">GitHub Token (PAT)</label>
+  <input type="password" id="ghToken" placeholder="ghp_...">
+
+  <label for="ghRepo">Repo (username/repo)</label>
+  <input type="text" id="ghRepo" placeholder="your-user/my-tracker">
+
+  <button id="saveBtn">Save Settings</button>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
