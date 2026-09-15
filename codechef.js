@@ -1,6 +1,7 @@
 // CodeChef Content Script (CodeSync)
-// Runs in the extension's ISOLATED world. Communicates with codechef-bridge.js (MAIN world)
-// to reliably obtain the complete code and dispatch to background.js for GitHub commit.
+// Runs in the extension's ISOLATED world across top window and any IDE iframes.
+// Communicates with codechef-bridge.js (MAIN world) to obtain complete solution code
+// and dispatches to background.js for automated GitHub commit.
 
 const CC_LANG_MAP = {
   "c++": "cpp",
@@ -43,8 +44,10 @@ const CC_LANG_MAP = {
 let cachedCode = "";
 let cachedLang = "cpp";
 let hasCommitted = false;
-let isObserving = false;
-let lastSyncedCode = "";
+let isSubmitting = false;
+let lastSyncedProblem = "";
+let verdictPollTimer = null;
+let verdictObserver = null;
 
 function normalizeLanguage(rawLang) {
   if (!rawLang) return "";
@@ -56,43 +59,77 @@ function normalizeLanguage(rawLang) {
   return "";
 }
 
-// 1. Listen for complete code broadcasted from codechef-bridge.js (MAIN world)
+// 1. Listen for code and events broadcasted from codechef-bridge.js (MAIN world)
 window.addEventListener("CodeSync_CodeChef_Data", (e) => {
   if (e.detail && e.detail.code && e.detail.code.trim()) {
     cachedCode = e.detail.code;
     const normalized = normalizeLanguage(e.detail.language);
     if (normalized) cachedLang = normalized;
-    console.debug(`[CodeSync CodeChef] Received code from bridge (${cachedCode.split('\n').length} lines, lang: ${cachedLang})`);
+    console.debug(`[CodeSync CodeChef] Received code from bridge (${cachedCode.split("\n").length} lines, lang: ${cachedLang})`);
   }
+});
+
+window.addEventListener("CodeSync_CodeChef_Submit_Started", (e) => {
+  if (e.detail && e.detail.language) {
+    const norm = normalizeLanguage(e.detail.language);
+    if (norm) cachedLang = norm;
+  }
+  onSubmissionInitiated("network-submit");
+});
+
+window.addEventListener("CodeSync_CodeChef_Verdict_Success", () => {
+  onVerdictSuccess("network-verdict");
 });
 
 function requestCodeFromBridge() {
   window.dispatchEvent(new CustomEvent("CodeSync_Request_CodeChef_Code"));
 }
 
-// 2. Listen for clicks on Submit button
-document.addEventListener("click", (e) => {
-  const btn = e.target.closest("button, a, input[type='submit']");
-  if (!btn) return;
-  const text = (btn.innerText || btn.textContent || btn.value || "").trim().toLowerCase();
+// 2. Submission Initiated Handler
+function onSubmissionInitiated(source = "ui") {
+  hasCommitted = false;
+  isSubmitting = true;
+  requestCodeFromBridge();
+  detectLanguageFromUI();
+  startVerdictWatcher();
+}
 
-  if (text === "submit" || text.includes("submit code") || text === "submit solution") {
-    hasCommitted = false;
-    requestCodeFromBridge();
-    detectLanguageFromUI();
-    waitForAcceptedVerdict();
-  }
-}, true);
+// Listen for clicks on any element representing a Submit action
+document.addEventListener(
+  "click",
+  (e) => {
+    const el = e.target.closest("button, a, [role='button'], input[type='submit'], [class*='submit'], [id*='submit']");
+    if (!el) return;
 
-// Listen for keyboard shortcut Ctrl+Enter / Cmd+Enter
-document.addEventListener("keydown", (e) => {
-  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-    hasCommitted = false;
-    requestCodeFromBridge();
-    detectLanguageFromUI();
-    waitForAcceptedVerdict();
-  }
-}, true);
+    const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
+    const id = (el.id || "").toLowerCase();
+    const aria = (el.getAttribute("aria-label") || "").toLowerCase();
+    const testId = (el.getAttribute("data-testid") || "").toLowerCase();
+    const cls = (typeof el.className === "string" ? el.className : "").toLowerCase();
+
+    if (
+      text.includes("submit") ||
+      id.includes("submit") ||
+      aria.includes("submit") ||
+      testId.includes("submit") ||
+      cls.includes("submit")
+    ) {
+      onSubmissionInitiated("click");
+    }
+  },
+  true
+);
+
+// Listen for keyboard shortcut (Ctrl+Enter / Cmd+Enter)
+document.addEventListener(
+  "keydown",
+  (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+      onSubmissionInitiated("shortcut");
+    }
+  },
+  true
+);
 
 // 3. Detect language from UI selectors
 function detectLanguageFromUI() {
@@ -102,7 +139,8 @@ function detectLanguageFromUI() {
     'button[id*="headlessui-listbox-button"]',
     '[class*="Select-value-label"]',
     '[class*="singleValue"]',
-    '.css-1uccc91-singleValue'
+    '.css-1uccc91-singleValue',
+    '[class*="lang-dropdown"]'
   ];
 
   for (const sel of langSelectors) {
@@ -118,7 +156,7 @@ function detectLanguageFromUI() {
   }
 }
 
-// Fallback extraction if bridge didn't supply code
+// Fallback code extraction from DOM
 function fallbackExtractCode() {
   // Monaco lines
   const monacoLines = document.querySelectorAll(".monaco-editor .view-line");
@@ -144,9 +182,21 @@ function fallbackExtractCode() {
       }
     }
   }
+
+  // Pre / code blocks (e.g. view-solution page)
+  if (!cachedCode.trim()) {
+    const codeBlocks = document.querySelectorAll("pre code, pre, [class*='solution-code'], [class*='source-code']");
+    for (const cb of codeBlocks) {
+      const t = (cb.innerText || cb.textContent || "").trim();
+      if (t.length > 20) {
+        cachedCode = t;
+        break;
+      }
+    }
+  }
 }
 
-// Syntax heuristics if language is still default
+// Syntax heuristics if language is default
 function refineLanguageBySyntax() {
   if (!cachedCode) return;
   if (/def\s+\w+\s*\(|print\(.*?\)|import\s+sys/i.test(cachedCode) && !/#include/i.test(cachedCode)) {
@@ -163,145 +213,284 @@ function refineLanguageBySyntax() {
 }
 
 // 4. Watch for successful submission verdict
-function waitForAcceptedVerdict() {
-  if (isObserving) return;
-  isObserving = true;
+function startVerdictWatcher() {
+  stopVerdictWatcher();
 
-  let pollTimer = null;
   let attempts = 0;
-  const maxAttempts = 60; // 30 seconds
+  const maxAttempts = 120; // 60 seconds (every 500ms)
 
-  const checkStatus = (observer) => {
+  const check = () => {
     if (hasCommitted) {
-      cleanup(observer);
+      stopVerdictWatcher();
       return;
     }
 
-    const bodyText = document.body ? (document.body.innerText || "") : "";
-
-    // Look for submission result container or modal
-    const modalEl = document.querySelector(
-      '[class*="submission-result"], [class*="submission__result"], [class*="SubmissionResult"], [class*="ResultModal"], [class*="status-container"], [class*="submission-status"], .modal-content, [role="dialog"], [class*="verdict"]'
-    );
-    const modalText = modalEl ? (modalEl.innerText || "") : "";
-
-    // Specific success elements on CodeChef (scoped to modal/verdict when available)
-    const successElement =
-      (modalEl && modalEl.querySelector(
-        '[class*="correct-answer"], [class*="status--accepted"], [class*="verdict-accepted"], [class*="status-accepted"], [class*="tick-icon"], [class*="tick"], [class*="badge--accepted"]'
-      )) ||
-      document.querySelector('[class*="verdict-accepted"], [class*="status--accepted"], [class*="correct-answer"]');
-
-    // Negative indicators: if still evaluating or failed, do not commit
-    const isProcessing =
-      bodyText.includes("Running...") ||
-      bodyText.includes("Judging...") ||
-      bodyText.includes("Evaluating...") ||
-      bodyText.includes("In Queue") ||
-      bodyText.includes("Compiling...");
-
-    const hasFailed =
-      bodyText.includes("Wrong Answer") ||
-      bodyText.includes("Partially Solved") ||
-      bodyText.includes("Time Limit Exceeded") ||
-      bodyText.includes("Runtime Error") ||
-      bodyText.includes("Compilation Error");
-
-    const isSuccess =
-      !isProcessing &&
-      (
-        Boolean(successElement) ||
-        modalText.includes("Correct Answer") ||
-        modalText.includes("Score: 100") ||
-        modalText.includes("Score 100") ||
-        modalText.includes("100/100") ||
-        bodyText.includes("Correct Answer") ||
-        bodyText.includes("Score: 100") ||
-        bodyText.includes("Score 100") ||
-        bodyText.includes("100 pts") ||
-        bodyText.includes("Accepted (100%)") ||
-        (bodyText.includes("AC") && !hasFailed && bodyText.includes("Submission Result"))
-      );
-
-    if (isSuccess && !hasCommitted) {
-      hasCommitted = true;
-      cleanup(observer);
-
-      requestCodeFromBridge();
-      setTimeout(() => {
-        dispatchCommit();
-      }, 700);
+    if (evaluateVerdict()) {
+      onVerdictSuccess("dom-verdict");
     }
   };
 
-  const cleanup = (observer) => {
-    isObserving = false;
-    if (observer) observer.disconnect();
-    if (pollTimer) clearInterval(pollTimer);
-  };
+  verdictObserver = new MutationObserver(check);
+  verdictObserver.observe(document.body, { childList: true, subtree: true });
 
-  const observer = new MutationObserver(() => {
-    checkStatus(observer);
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  pollTimer = setInterval(() => {
+  verdictPollTimer = setInterval(() => {
     attempts++;
-    checkStatus(observer);
+    check();
     if (attempts >= maxAttempts) {
-      cleanup(observer);
+      stopVerdictWatcher();
     }
   }, 500);
 }
 
-// 5. Dispatch payload to background.js
+function stopVerdictWatcher() {
+  if (verdictObserver) {
+    verdictObserver.disconnect();
+    verdictObserver = null;
+  }
+  if (verdictPollTimer) {
+    clearInterval(verdictPollTimer);
+    verdictPollTimer = null;
+  }
+}
+
+function evaluateVerdict() {
+  // 1. Scoped check inside submission/verdict containers
+  const containers = document.querySelectorAll(
+    '[class*="submission"], [class*="result"], [class*="verdict"], [class*="status"], [class*="modal"], [role="dialog"], [class*="drawer"], [class*="pane"], [class*="output"]'
+  );
+
+  for (const c of containers) {
+    const text = (c.innerText || c.textContent || "").trim();
+    if (!text) continue;
+
+    // Check if still evaluating
+    if (
+      text.includes("Running") ||
+      text.includes("Judging") ||
+      text.includes("Evaluating") ||
+      text.includes("Compiling") ||
+      text.includes("In Queue")
+    ) {
+      return false;
+    }
+
+    // Check if failed (only inside container)
+    if (
+      text.includes("Wrong Answer") ||
+      text.includes("Time Limit Exceeded") ||
+      text.includes("Runtime Error") ||
+      text.includes("Compilation Error")
+    ) {
+      stopVerdictWatcher();
+      return false;
+    }
+
+    // Direct success indicators inside result container
+    if (
+      text.includes("Correct Answer") ||
+      text.includes("Score: 100") ||
+      text.includes("Score 100") ||
+      text.includes("100/100") ||
+      text.includes("100 pts") ||
+      text.includes("100 points") ||
+      text.includes("Problem Solved Successfully") ||
+      text.includes("All Test Cases Passed")
+    ) {
+      return true;
+    }
+
+    // Exact badge check inside container
+    const badges = c.querySelectorAll('span, div, h2, h3, h4, p, [class*="tag"], [class*="badge"], [class*="status"]');
+    for (const b of badges) {
+      const bt = (b.innerText || b.textContent || "").trim();
+      if (bt === "Accepted" || bt === "Correct Answer" || bt === "AC") {
+        return true;
+      }
+    }
+  }
+
+  // 2. Global check for newly rendered standalone "Accepted" elements
+  const allBadges = document.querySelectorAll('span, div, h2, h3, h4, p, [class*="badge"], [class*="tag"], [class*="status"], [class*="verdict"]');
+  for (const el of allBadges) {
+    if (el.children.length <= 1) {
+      const text = (el.innerText || el.textContent || "").trim();
+      if (text === "Accepted" || text === "Correct Answer") {
+        if (!el.closest("header, nav, footer, aside, .breadcrumbs")) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+function onVerdictSuccess(source = "unknown") {
+  if (hasCommitted) return;
+  hasCommitted = true;
+  isSubmitting = false;
+  stopVerdictWatcher();
+
+  console.log(`[CodeSync CodeChef] Accepted verdict confirmed via ${source}! Preparing commit...`);
+  requestCodeFromBridge();
+
+  setTimeout(() => {
+    dispatchCommit();
+  }, 700);
+}
+
+// 5. Extract Problem Code & Title
+function getProblemInfo() {
+  let problemCode = "";
+  let problemTitle = "";
+
+  // 1. Analyze path segments from right to left to locate problem code
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if ((parts[i - 1] === "problems" || parts[i - 1] === "submit") && parts[i]) {
+      problemCode = parts[i].trim();
+      break;
+    }
+  }
+
+  if (!problemCode && parts.length > 0) {
+    problemCode = parts[parts.length - 1];
+  }
+
+  // 2. Primary: Extract title from document.title (e.g. "Chef and Brain Speed | CodeChef")
+  let docTitle = "";
+  try {
+    docTitle = (window.top ? window.top.document.title : document.title) || document.title || "";
+  } catch (_) {
+    docTitle = document.title || "";
+  }
+
+  if (docTitle) {
+    let cleaned = docTitle.split(/[|\-–—]/)[0].trim();
+    cleaned = cleaned.replace(/\s*(?:Practice\s*)?Coding\s*Problem\s*/gi, "").trim();
+    cleaned = cleaned.replace(/\s*\(.*?\)\s*/g, "").trim();
+    const lower = cleaned.toLowerCase();
+    const isBad =
+      !cleaned ||
+      lower === "codechef" ||
+      lower.includes("ai tutor") ||
+      lower.includes("welcome to") ||
+      lower.includes("solve programming problems") ||
+      lower.includes("competitive programming");
+
+    if (!isBad && cleaned.length < 120) {
+      problemTitle = cleaned;
+    }
+  }
+
+  // 3. Secondary: Look inside dedicated problem description / statement containers
+  if (!problemTitle) {
+    const statementContainers = [
+      '[class*="problem-statement"]',
+      '[class*="problem_statement"]',
+      '[class*="ProblemStatement"]',
+      '[class*="problem-description"]',
+      '[class*="problemDescription"]',
+      '[class*="ProblemDescription"]',
+      '[class*="problem-header"]',
+      '[class*="ProblemHeader"]',
+      '[class*="problem_header"]',
+      '[id="problem-statement"]',
+      '[class*="left-pane"]',
+      '[class*="leftPane"]',
+      '[class*="problem-pane"]'
+    ];
+
+    for (const sel of statementContainers) {
+      const container = document.querySelector(sel);
+      if (container) {
+        const heading = container.querySelector(
+          "h1, h2, h3, [class*='title'], [class*='problem-title'], [class*='problemName']"
+        );
+        if (heading) {
+          let raw = (heading.innerText || heading.textContent || "").trim().split("\n")[0].trim();
+          raw = raw.replace(/\(Problem Code:.*?\)/gi, "").trim();
+          const lower = raw.toLowerCase();
+          if (
+            raw &&
+            !lower.includes("ai tutor") &&
+            !lower.includes("welcome to") &&
+            !lower.includes("submit") &&
+            raw.length < 120
+          ) {
+            problemTitle = raw;
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Tertiary: Scan general headings, explicitly excluding AI Tutor / widgets
+  if (!problemTitle) {
+    const headings = document.querySelectorAll("h1, h2, h3");
+    for (const h of headings) {
+      let raw = (h.innerText || h.textContent || "").trim().split("\n")[0].trim();
+      raw = raw.replace(/\(Problem Code:.*?\)/gi, "").trim();
+      const lower = raw.toLowerCase();
+      if (
+        raw &&
+        raw.length > 2 &&
+        raw.length < 120 &&
+        !lower.includes("ai tutor") &&
+        !lower.includes("welcome to") &&
+        !lower.includes("submit") &&
+        !lower.includes("codechef") &&
+        !lower.includes("announcement") &&
+        !lower.includes("discussion") &&
+        !lower.includes("editorial") &&
+        !lower.includes("solution")
+      ) {
+        problemTitle = raw;
+        break;
+      }
+    }
+  }
+
+  // 5. Fallback: If title could not be found, use problemCode
+  if (!problemTitle && problemCode) {
+    problemTitle = problemCode;
+  }
+
+  if (!problemTitle) {
+    problemTitle = "Problem";
+  }
+
+  return { problemCode, problemTitle };
+}
+
+// 6. Dispatch payload to background.js
 function dispatchCommit() {
   if (!cachedCode || !cachedCode.trim()) {
     fallbackExtractCode();
   }
 
+  const { problemCode, problemTitle } = getProblemInfo();
+
   if (!cachedCode || !cachedCode.trim()) {
-    console.warn("[CodeSync] Aborted commit: No code captured in editor.");
+    console.warn("[CodeSync CodeChef] Aborted commit: No code captured in editor buffer.");
+    showSyncFlashToast({
+      state: "error",
+      error: "Unable to read solution code from the editor.",
+      problemTitle: problemTitle
+    });
     return;
   }
 
   refineLanguageBySyntax();
 
-  // Extract problem code and title
-  let problemCode = "";
-  let problemTitle = "Challenge";
-
-  const urlMatches =
-    window.location.pathname.match(/problems\/([^\/?#]+)/) ||
-    window.location.pathname.match(/submit\/([^\/?#]+)/);
-
-  if (urlMatches && urlMatches[1]) {
-    problemCode = urlMatches[1].trim();
-    problemTitle = problemCode;
-  }
-
-  const titleEl = document.querySelector(
-    "[class*='ProblemTitle'], [class*='problem-title'], [class*='problemName'], [data-testid='problem-title'], h1, .title"
-  );
-  if (titleEl && titleEl.innerText && titleEl.innerText.trim()) {
-    let rawTitle = titleEl.innerText.trim().split("\n")[0].trim();
-    rawTitle = rawTitle.replace(/\(Problem Code:.*?\)/gi, "").trim();
-    if (rawTitle && !rawTitle.toLowerCase().includes("submit") && rawTitle.length < 100) {
-      problemTitle = rawTitle;
-    }
-  }
-
-  // Avoid redundant FLOW001_FLOW001 if problemTitle is already the problemCode
-  const pNumber = (problemCode && problemTitle.toLowerCase() === problemCode.toLowerCase())
-    ? ""
-    : problemCode;
-
-  // Avoid rapid duplicate syncs
-  if (lastSyncedCode === (problemCode || problemTitle)) {
+  // Avoid rapid duplicate commits
+  const currentKey = `${problemCode}_${problemTitle}`;
+  if (lastSyncedProblem === currentKey) {
     const elapsed = Date.now() - (dispatchCommit.lastTime || 0);
     if (elapsed < 5000) return;
   }
-  lastSyncedCode = problemCode || problemTitle;
+  lastSyncedProblem = currentKey;
   dispatchCommit.lastTime = Date.now();
 
   // Check if extension is enabled via popup toggle
@@ -316,11 +505,12 @@ function dispatchCommit() {
       problemTitle: problemTitle
     });
 
+    // Pass problemNumber as "" so file is formatted as [problem title].extension
     chrome.runtime.sendMessage({
       type: "SUBMISSION_ACCEPTED",
       payload: {
         platform: "CodeChef",
-        problemNumber: pNumber,
+        problemNumber: "",
         problemTitle: problemTitle,
         languageExtension: cachedLang,
         code: cachedCode
@@ -329,7 +519,7 @@ function dispatchCommit() {
       .then(() => {
         const lineCount = cachedCode.split("\n").length;
         console.log(
-          `%c[CodeSync] Successfully dispatched CodeChef: ${problemTitle}.${cachedLang} (${lineCount} lines, ${cachedCode.length} chars)`,
+          `%c[CodeSync] Dispatched CodeChef solution: ${problemTitle}.${cachedLang} (${lineCount} lines)`,
           "color: #2da44e; font-weight: bold;"
         );
       })
@@ -344,16 +534,30 @@ function dispatchCommit() {
   });
 }
 
-// 6. Listen for commit result from background.js and display animated flash pop toast
+// 7. Listen for commit result from background.js
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "COMMIT_RESULT") {
     showSyncFlashToast(message);
   }
 });
 
+// Cross-frame message handling (if embedded in an iframe)
+window.addEventListener("message", (e) => {
+  if (e.data && e.data.type === "CodeSync_Show_Toast") {
+    showSyncFlashToast(e.data.result);
+  }
+});
+
 let codesyncToastTimer = null;
 
 function showSyncFlashToast(result) {
+  // If in an iframe, forward to the top window for unclipped rendering
+  if (window !== window.top) {
+    try {
+      window.top.postMessage({ type: "CodeSync_Show_Toast", result }, "*");
+    } catch (_) {}
+  }
+
   const isLoading = result.state === "loading";
   const isSuccess = !isLoading && Boolean(result.success);
   const isError = !isLoading && !isSuccess;
