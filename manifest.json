@@ -10,7 +10,8 @@
     "https://api.github.com/*",
     "https://leetcode.com/*",
     "https://*.geeksforgeeks.org/*",
-    "https://www.hackerrank.com/*"
+    "https://www.hackerrank.com/*",
+    "https://www.codechef.com/*"
   ],
   "action": {
     "default_popup": "popup.html"
@@ -47,6 +48,27 @@
         "https://www.hackerrank.com/contests/*/challenges/*"
       ],
       "js": ["hackerrank.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.codechef.com/problems/*",
+        "https://www.codechef.com/practice/course/*",
+        "https://www.codechef.com/*/problems/*",
+        "https://www.codechef.com/submit/*"
+      ],
+      "js": ["codechef-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.codechef.com/problems/*",
+        "https://www.codechef.com/practice/course/*",
+        "https://www.codechef.com/*/problems/*",
+        "https://www.codechef.com/submit/*"
+      ],
+      "js": ["codechef.js"],
       "run_at": "document_idle"
     }
   ]
