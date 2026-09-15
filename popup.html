@@ -2,63 +2,374 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CodeSync Settings</title>
   <style>
-    body {
-      width: 260px;
-      padding: 12px;
-      font-family: Arial, sans-serif;
-      font-size: 14px;
+    * {
+      box-sizing: border-box;
       margin: 0;
+      padding: 0;
     }
-    .toggle-container {
+
+    body {
+      width: 320px;
+      padding: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      font-size: 13px;
+      background: #0d1117;
+      color: #c9d1d9;
+      user-select: none;
+    }
+
+    /* Header */
+    .header {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      margin-bottom: 16px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid #21262d;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .brand-icon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+      background: linear-gradient(135deg, #2ea043, #388bfd);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 10px rgba(46, 160, 67, 0.4);
+    }
+
+    .brand-icon svg {
+      width: 14px;
+      height: 14px;
+      fill: #ffffff;
+    }
+
+    .brand-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: -0.2px;
+    }
+
+    .badge-ver {
+      font-size: 10px;
+      font-weight: 600;
+      color: #8b949e;
+      background: #21262d;
+      border: 1px solid #30363d;
+      padding: 2px 6px;
+      border-radius: 12px;
+    }
+
+    /* Hero Toggle Card */
+    .toggle-card {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 10px;
+      padding: 12px 14px;
+      margin-bottom: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      transition: border-color 0.25s, box-shadow 0.25s;
+    }
+
+    .toggle-card.active {
+      border-color: rgba(46, 160, 67, 0.6);
+      box-shadow: 0 0 16px rgba(46, 160, 67, 0.15);
+    }
+
+    .toggle-info {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .toggle-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .status-indicator {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+
+    .status-dot.on {
+      background: #3fb950;
+      box-shadow: 0 0 6px #3fb950;
+    }
+
+    .status-dot.off {
+      background: #6e7681;
+    }
+
+    .status-text.on {
+      color: #3fb950;
+    }
+
+    .status-text.off {
+      color: #8b949e;
+    }
+
+    /* Modern Switch */
+    .switch {
+      position: relative;
+      display: inline-block;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+
+    .switch input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #30363d;
+      transition: 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      border-radius: 24px;
+      border: 1px solid #484f58;
+    }
+
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 18px;
+      width: 18px;
+      left: 2px;
+      bottom: 2px;
+      background-color: #ffffff;
+      transition: 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      border-radius: 50%;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.4);
+    }
+
+    input:checked + .slider {
+      background-color: #2ea043;
+      border-color: #3fb950;
+      box-shadow: 0 0 10px rgba(46, 160, 67, 0.4);
+    }
+
+    input:checked + .slider:before {
+      transform: translateX(20px);
+    }
+
+    /* Form Fields */
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: #8b949e;
+      margin-bottom: 10px;
+    }
+
+    .form-group {
       margin-bottom: 12px;
     }
-    input[type="text"], input[type="password"] {
-      width: 100%;
-      box-sizing: border-box;
-      padding: 6px;
-      margin-top: 4px;
-      margin-bottom: 8px;
-      border: 1px solid #ccc;
-      border-radius: 4px;
+
+    .label-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 5px;
     }
-    button {
+
+    label {
+      font-size: 12px;
+      font-weight: 500;
+      color: #c9d1d9;
+    }
+
+    .input-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+    }
+
+    input[type="text"],
+    input[type="password"] {
       width: 100%;
-      padding: 8px;
-      background-color: #2da44e;
-      color: white;
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 6px;
+      color: #e6edf3;
+      font-size: 12px;
+      font-family: inherit;
+      padding: 8px 10px;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus {
+      border-color: #388bfd;
+      box-shadow: 0 0 0 2px rgba(56, 139, 253, 0.2);
+    }
+
+    .toggle-visibility {
+      position: absolute;
+      right: 8px;
+      background: none;
       border: none;
-      border-radius: 4px;
+      color: #8b949e;
       cursor: pointer;
-      font-weight: bold;
+      font-size: 11px;
+      padding: 2px 4px;
+      border-radius: 4px;
     }
-    button:hover {
-      background-color: #2c974b;
+
+    .toggle-visibility:hover {
+      color: #e6edf3;
     }
+
+    /* Button */
+    .save-btn {
+      width: 100%;
+      padding: 9px;
+      margin-top: 6px;
+      background: #238636;
+      color: #ffffff;
+      border: 1px solid rgba(240, 246, 252, 0.1);
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.2s, transform 0.1s;
+    }
+
+    .save-btn:hover {
+      background: #2ea043;
+    }
+
+    .save-btn:active {
+      transform: scale(0.98);
+    }
+
+    /* Status Banner */
     #status {
-      margin-top: 8px;
+      margin-top: 10px;
       font-size: 12px;
       text-align: center;
+      min-height: 16px;
+      font-weight: 500;
+      transition: opacity 0.3s;
+    }
+
+    /* Footer Platforms */
+    .platforms-footer {
+      margin-top: 14px;
+      padding-top: 10px;
+      border-top: 1px solid #21262d;
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      font-size: 10px;
+      color: #8b949e;
+    }
+
+    .platform-pill {
+      background: #161b22;
+      border: 1px solid #30363d;
+      padding: 2px 6px;
+      border-radius: 10px;
     }
   </style>
 </head>
 <body>
-  <div class="toggle-container">
-    <span><strong>Auto-Sync</strong></span>
-    <input type="checkbox" id="syncToggle">
+
+  <!-- Header -->
+  <div class="header">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg viewBox="0 0 16 16"><path d="M1.705 8.005a.75.75 0 0 1 .834.656 5.5 5.5 0 0 0 9.592 2.97l-1.204-1.204a.25.25 0 0 1 .177-.427h3.646a.25.25 0 0 1 .25.25v3.646a.25.25 0 0 1-.427.177l-1.38-1.38A7 7 0 0 1 1.05 8.84a.75.75 0 0 1 .655-.835Zm12.59-1.01a.75.75 0 0 1-.834-.656 5.5 5.5 0 0 0-9.592-2.97l1.204 1.204a.25.25 0 0 1-.177.427H1.25a.25.25 0 0 1-.25-.25V1.104a.25.25 0 0 1 .427-.177l1.38 1.38A7 7 0 0 1 14.95 7.16a.75.75 0 0 1-.655.835Z"></path></svg>
+      </div>
+      <span class="brand-title">CodeSync</span>
+    </div>
+    <span class="badge-ver">v1.2</span>
   </div>
-  
-  <label for="ghToken">GitHub Token (PAT)</label>
-  <input type="password" id="ghToken" placeholder="ghp_...">
 
-  <label for="ghRepo">Repo (username/repo)</label>
-  <input type="text" id="ghRepo" placeholder="your-user/my-tracker">
+  <!-- Hero Power Toggle Card -->
+  <div class="toggle-card" id="toggleCard">
+    <div class="toggle-info">
+      <span class="toggle-title">Extension Auto-Sync</span>
+      <div class="status-indicator">
+        <span class="status-dot on" id="statusDot"></span>
+        <span class="status-text on" id="statusText">Active (Syncing)</span>
+      </div>
+    </div>
+    <label class="switch" for="syncToggle">
+      <input type="checkbox" id="syncToggle" checked>
+      <span class="slider"></span>
+    </label>
+  </div>
 
-  <button id="saveBtn">Save Settings</button>
+  <!-- Settings Section -->
+  <div class="section-label">GitHub Configuration</div>
+
+  <div class="form-group">
+    <div class="label-row">
+      <label for="ghToken">Personal Access Token</label>
+    </div>
+    <div class="input-wrapper">
+      <input type="password" id="ghToken" placeholder="ghp_xxxxxxxxxxxxxx">
+      <button type="button" class="toggle-visibility" id="toggleTokenVis">Show</button>
+    </div>
+  </div>
+
+  <div class="form-group">
+    <div class="label-row">
+      <label for="ghRepo">Target Repository</label>
+    </div>
+    <input type="text" id="ghRepo" placeholder="username/repository">
+  </div>
+
+  <button class="save-btn" id="saveBtn">
+    <span>Save Settings</span>
+  </button>
+
   <div id="status"></div>
+
+  <!-- Supported Platforms Footer -->
+  <div class="platforms-footer">
+    <span class="platform-pill">LeetCode</span>
+    <span class="platform-pill">GeeksforGeeks</span>
+    <span class="platform-pill">HackerRank</span>
+  </div>
 
   <script src="popup.js"></script>
 </body>

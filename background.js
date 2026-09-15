@@ -20,6 +20,13 @@ function notifyTab(sender, result) {
 }
 
 async function commitToGitHub(payload, sender) {
+  const config = await chrome.storage.sync.get(["autoSync", "ghToken", "ghRepo"]);
+
+  if (config.autoSync === false) {
+    console.log("[CodeSync] Auto-sync disabled. Skipping commit.");
+    return;
+  }
+
   const { platform, problemNumber, problemTitle, languageExtension, code } = payload;
   showBadgeLoading();
 
@@ -32,13 +39,6 @@ async function commitToGitHub(payload, sender) {
       platform,
       problemTitle
     });
-    return;
-  }
-
-  const config = await chrome.storage.sync.get(["autoSync", "ghToken", "ghRepo"]);
-
-  if (config.autoSync === false) {
-    console.log("[CodeSync] Auto-sync disabled. Skipping commit.");
     return;
   }
 
@@ -184,7 +184,7 @@ function showBadgeSuccess() {
     if (Date.now() - startTime >= 4000) {
       clearInterval(badgeTimer);
       badgeTimer = null;
-      chrome.action.setBadgeText({ text: "" });
+      restoreDefaultBadge();
     } else {
       update();
     }
@@ -217,9 +217,35 @@ function showBadgeError() {
     if (Date.now() - startTime >= 4000) {
       clearInterval(badgeTimer);
       badgeTimer = null;
-      chrome.action.setBadgeText({ text: "" });
+      restoreDefaultBadge();
     } else {
       update();
     }
   }, 400);
 }
+
+// Restores default badge: "OFF" if autoSync is disabled, or blank if enabled
+function restoreDefaultBadge() {
+  chrome.storage.sync.get(["autoSync"], (data) => {
+    if (data.autoSync === false) {
+      chrome.action.setBadgeBackgroundColor({ color: "#6e7681" });
+      chrome.action.setBadgeText({ text: "OFF" });
+    } else {
+      chrome.action.setBadgeText({ text: "" });
+    }
+  });
+}
+
+// Sync initial badge state on startup
+restoreDefaultBadge();
+
+// Listen for toggle changes from popup
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.autoSync !== undefined) {
+    if (badgeTimer) {
+      clearInterval(badgeTimer);
+      badgeTimer = null;
+    }
+    restoreDefaultBadge();
+  }
+});

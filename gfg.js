@@ -125,32 +125,39 @@ function extractAndDispatchGFG() {
   lastSyncedProblem = problemTitle;
 
   // D. Dispatch to background.js with empty problemNumber
-  showSyncFlashToast({
-    state: "loading",
-    problemTitle: problemTitle
-  });
-
-  chrome.runtime.sendMessage({
-    type: "SUBMISSION_ACCEPTED",
-    payload: {
-      platform: "GeeksforGeeks",
-      problemNumber: "",
-      problemTitle: problemTitle,
-      languageExtension: extension,
-      code: code
+  chrome.storage.sync.get(["autoSync"], (data) => {
+    if (data.autoSync === false) {
+      console.log("[CodeSync] Auto-sync is currently paused via popup toggle. Skipping commit.");
+      return;
     }
-  })
-    .then(() => {
-      console.log(`%c[CodeSync] Committed GFG problem: ${problemTitle}.${extension}`, "color: #2da44e; font-weight: bold;");
-    })
-    .catch((err) => {
-      console.warn("[CodeSync] Message delivery failed. Please reload the tab.", err);
-      showSyncFlashToast({
-        state: "error",
-        error: "Extension communication failed. Please reload the tab.",
-        problemTitle: problemTitle
-      });
+
+    showSyncFlashToast({
+      state: "loading",
+      problemTitle: problemTitle
     });
+
+    chrome.runtime.sendMessage({
+      type: "SUBMISSION_ACCEPTED",
+      payload: {
+        platform: "GeeksforGeeks",
+        problemNumber: "",
+        problemTitle: problemTitle,
+        languageExtension: extension,
+        code: code
+      }
+    })
+      .then(() => {
+        console.log(`%c[CodeSync] Committed GFG problem: ${problemTitle}.${extension}`, "color: #2da44e; font-weight: bold;");
+      })
+      .catch((err) => {
+        console.warn("[CodeSync] Message delivery failed. Please reload the tab.", err);
+        showSyncFlashToast({
+          state: "error",
+          error: "Extension communication failed. Please reload the tab.",
+          problemTitle: problemTitle
+        });
+      });
+  });
 }
 
 // 4. Listen for commit result from background.js and display animated flash pop toast

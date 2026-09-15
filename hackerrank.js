@@ -272,37 +272,45 @@ function dispatchCommit() {
   lastSyncedTitle = problemTitle;
   dispatchCommit.lastTime = Date.now();
 
-  // Show immediate "Git committing..." loading pop-up message
-  showSyncFlashToast({
-    state: "loading",
-    problemTitle: problemTitle
-  });
-
-  chrome.runtime.sendMessage({
-    type: "SUBMISSION_ACCEPTED",
-    payload: {
-      platform: "HackerRank",
-      problemNumber: "",
-      problemTitle: problemTitle,
-      languageExtension: cachedLang,
-      code: cachedCode
+  // Check if extension is enabled via popup toggle
+  chrome.storage.sync.get(["autoSync"], (data) => {
+    if (data.autoSync === false) {
+      console.log("[CodeSync] Auto-sync is currently paused via popup toggle. Skipping commit.");
+      return;
     }
-  })
-    .then(() => {
-      const lineCount = cachedCode.split("\n").length;
-      console.log(
-        `%c[CodeSync] Successfully dispatched HackerRank: ${problemTitle}.${cachedLang} (${lineCount} lines, ${cachedCode.length} chars)`,
-        "color: #2da44e; font-weight: bold;"
-      );
-    })
-    .catch((err) => {
-      console.warn("[CodeSync] Message delivery failed. Please reload the tab.", err);
-      showSyncFlashToast({
-        state: "error",
-        error: "Extension communication failed. Please reload the tab.",
-        problemTitle: problemTitle
-      });
+
+    // Show immediate "Git committing..." loading pop-up message
+    showSyncFlashToast({
+      state: "loading",
+      problemTitle: problemTitle
     });
+
+    chrome.runtime.sendMessage({
+      type: "SUBMISSION_ACCEPTED",
+      payload: {
+        platform: "HackerRank",
+        problemNumber: "",
+        problemTitle: problemTitle,
+        languageExtension: cachedLang,
+        code: cachedCode
+      }
+    })
+      .then(() => {
+        const lineCount = cachedCode.split("\n").length;
+        console.log(
+          `%c[CodeSync] Successfully dispatched HackerRank: ${problemTitle}.${cachedLang} (${lineCount} lines, ${cachedCode.length} chars)`,
+          "color: #2da44e; font-weight: bold;"
+        );
+      })
+      .catch((err) => {
+        console.warn("[CodeSync] Message delivery failed. Please reload the tab.", err);
+        showSyncFlashToast({
+          state: "error",
+          error: "Extension communication failed. Please reload the tab.",
+          problemTitle: problemTitle
+        });
+      });
+  });
 }
 
 // 6. Listen for commit result from background.js and display animated flash pop toast
