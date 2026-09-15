@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "CodeSync Tracker",
-  "version": "1.1",
+  "version": "1.2",
   "description": "Auto-commits accepted solutions to my private GitHub tracker.",
   "permissions": [
     "storage"
@@ -9,7 +9,8 @@
   "host_permissions": [
     "https://api.github.com/*",
     "https://leetcode.com/*",
-    "https://*.geeksforgeeks.org/*"
+    "https://*.geeksforgeeks.org/*",
+    "https://www.hackerrank.com/*"
   ],
   "action": {
     "default_popup": "popup.html"
@@ -29,6 +30,23 @@
         "https://practice.geeksforgeeks.org/problems/*"
       ],
       "js": ["gfg.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.hackerrank.com/challenges/*",
+        "https://www.hackerrank.com/contests/*/challenges/*"
+      ],
+      "js": ["hackerrank-bridge.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://www.hackerrank.com/challenges/*",
+        "https://www.hackerrank.com/contests/*/challenges/*"
+      ],
+      "js": ["hackerrank.js"],
       "run_at": "document_idle"
     }
   ]

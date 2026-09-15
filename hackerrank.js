@@ -1,165 +1,278 @@
-const EXTENSION_MAP = {
-  // Systems & Compiled
+// HackerRank Content Script (CodeSync)
+// Runs in the extension's ISOLATED world. Communicates with hackerrank-bridge.js (MAIN world)
+// to reliably obtain the complete code and dispatch to background.js for GitHub commit.
+
+const HR_LANG_MAP = {
   "c++": "cpp",
   "cpp": "cpp",
-  "clang": "c",
+  "cpp14": "cpp",
+  "cpp20": "cpp",
+  "c++14": "cpp",
+  "c++20": "cpp",
   "c": "c",
+  "java": "java",
+  "java 8": "java",
+  "java 15": "java",
+  "java8": "java",
+  "java15": "java",
+  "python": "py",
+  "python 3": "py",
+  "python3": "py",
+  "python2": "py",
+  "pypy": "py",
+  "pypy 3": "py",
+  "pypy3": "py",
+  "javascript": "js",
+  "typescript": "ts",
   "c#": "cs",
   "csharp": "cs",
-  "rust": "rs",
+  "ruby": "rb",
   "go": "go",
   "golang": "go",
-
-  // JVM Languages
-  "java": "java",
+  "rust": "rs",
   "kotlin": "kt",
   "scala": "scala",
-
-  // Scripting & Web
-  "python": "py",
-  "python3": "py",
-  "py": "py",
-  "javascript": "js",
-  "js": "js",
-  "typescript": "ts",
-  "ts": "ts",
-  "php": "php",
-  "ruby": "rb",
-
-  // Mobile
   "swift": "swift",
-  "dart": "dart",
-
-  // Functional & Others
-  "racket": "rkt",
-  "erlang": "erl",
-  "elixir": "ex",
-
-  // Database & Shell
-  "mysql": "sql",
-  "ms sql server": "sql",
-  "oracle": "sql",
-  "postgresql": "sql",
+  "php": "php",
+  "r": "r",
+  "perl": "pl",
   "sql": "sql",
-  "pandas": "py",
+  "mysql": "sql",
+  "oracle": "sql",
   "bash": "sh"
 };
 
-let isSubmitting = false;
+let cachedCode = "";
+let cachedLang = "cpp";
+let hasCommitted = false;
+let isObserving = false;
+let lastSyncedTitle = "";
 
-// 1. Listen for clicks on the Submit button
-document.addEventListener("click", (e) => {
-  const target = e.target.closest("button");
-  if (target && target.innerText.trim().toLowerCase().includes("submit")) {
-    isSubmitting = true;
-    waitForAcceptedVerdict();
+function normalizeLanguage(rawLang) {
+  if (!rawLang) return "";
+  const cleaned = rawLang.trim().toLowerCase();
+  if (HR_LANG_MAP[cleaned]) return HR_LANG_MAP[cleaned];
+  for (const [key, ext] of Object.entries(HR_LANG_MAP)) {
+    if (cleaned.includes(key)) return ext;
+  }
+  return "";
+}
+
+// 1. Listen for complete code broadcasted from hackerrank-bridge.js (MAIN world)
+window.addEventListener("CodeSync_HackerRank_Data", (e) => {
+  if (e.detail && e.detail.code && e.detail.code.trim()) {
+    cachedCode = e.detail.code;
+    const normalized = normalizeLanguage(e.detail.language);
+    if (normalized) cachedLang = normalized;
+    console.debug(`[CodeSync] Captured code from bridge (${cachedCode.split('\n').length} lines, lang: ${cachedLang}, source: ${e.detail.source || 'unknown'})`);
   }
 });
 
-// 2. Watch DOM for the "Accepted" status
-function waitForAcceptedVerdict() {
-  const observer = new MutationObserver((mutations, obs) => {
-    if (!isSubmitting) return;
-
-    const resultElement = document.querySelector(
-      '[data-e2e-locator="submission-result"], [class*="result-text"], span[class*="text-green"]'
-    );
-
-    if (resultElement && resultElement.innerText.trim() === "Accepted") {
-      isSubmitting = false;
-      obs.disconnect(); // Stop observing to prevent duplicate calls
-
-      // Wait 800ms for submission details and code layout to settle
-      setTimeout(extractAndDispatchSubmission, 800);
-    }
-  });
-
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // Safety timeout after 30 seconds
-  setTimeout(() => {
-    observer.disconnect();
-    isSubmitting = false;
-  }, 30000);
+// Request code extraction from the bridge
+function requestCodeFromBridge() {
+  window.dispatchEvent(new CustomEvent("CodeSync_Request_HackerRank_Code"));
 }
 
-// 3. Extract metadata, code, and language
-function extractAndDispatchSubmission() {
-  // A. Extract Code from Monaco Editor FIRST so it is initialized
-  let code = "";
-  const codeLines = document.querySelectorAll(".monaco-editor .view-line");
-  if (codeLines.length > 0) {
-    code = Array.from(codeLines)
-      .map((line) => line.textContent)
+// 2. Listen for clicks on Submit Code button
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button");
+  if (!btn) return;
+  const label = (btn.innerText || btn.textContent || "").trim().toLowerCase();
+
+  if (label.includes("submit code") || label === "submit") {
+    hasCommitted = false;
+    requestCodeFromBridge();
+    detectLanguageFromUI();
+    waitForAcceptedVerdict();
+  }
+}, true); // Capture phase to run before HackerRank modifies/disables elements
+
+// Also listen for shortcut keys like Ctrl+Enter / Cmd+Enter which submit code
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    requestCodeFromBridge();
+    detectLanguageFromUI();
+    waitForAcceptedVerdict();
+  }
+}, true);
+
+// 3. Detect language from UI dropdown
+function detectLanguageFromUI() {
+  const langContainer = document.querySelector(
+    '[class*="select-language"], [data-analytics="SelectLanguage"], .css-1uccc91-singleValue, .css-1hwfws3, [class*="select__single-value"]'
+  );
+  if (langContainer) {
+    const text = (langContainer.innerText || langContainer.textContent || "").trim().toLowerCase();
+    const normalized = normalizeLanguage(text);
+    if (normalized) {
+      cachedLang = normalized;
+    }
+  }
+}
+
+// Fallback extraction if bridge didn't supply code
+function fallbackExtractCode() {
+  // Method 1: Monaco view lines (all available rendered lines)
+  const monacoLines = document.querySelectorAll(".monaco-editor .view-line");
+  if (monacoLines.length > 0) {
+    const joined = Array.from(monacoLines)
+      .map((el) => el.textContent)
       .join("\n");
+    if (joined.trim().length > cachedCode.length) {
+      cachedCode = joined;
+    }
   }
 
-  if (!code.trim()) {
-    console.warn("[CodeSync] Could not locate code in editor.");
+  // Method 2: Ace editor lines
+  const aceLines = document.querySelectorAll(".ace_line");
+  if (aceLines.length > 0) {
+    const joined = Array.from(aceLines)
+      .map((el) => el.textContent)
+      .join("\n");
+    if (joined.trim().length > cachedCode.length) {
+      cachedCode = joined;
+    }
+  }
+
+  // Method 3: Textareas
+  if (!cachedCode.trim()) {
+    const textareas = document.querySelectorAll("textarea.inputarea, .monaco-editor textarea, textarea");
+    for (const ta of textareas) {
+      if (ta.value && ta.value.trim().length > 0) {
+        cachedCode = ta.value;
+        break;
+      }
+    }
+  }
+}
+
+// Syntax heuristics if language is still default
+function refineLanguageBySyntax() {
+  if (!cachedCode) return;
+  if (/def\s+\w+\s*\(|print\(.*?\)|import\s+sys/i.test(cachedCode) && !/#include/i.test(cachedCode)) {
+    cachedLang = "py";
+  } else if (/#include|std::|cin\s*>>|cout\s*<</i.test(cachedCode)) {
+    cachedLang = "cpp";
+  } else if (/public\s+class|System\.out\.println/i.test(cachedCode)) {
+    cachedLang = "java";
+  } else if (/package\s+main|func\s+main/i.test(cachedCode)) {
+    cachedLang = "go";
+  } else if (/fn\s+main/i.test(cachedCode)) {
+    cachedLang = "rs";
+  }
+}
+
+// 4. Watch for successful submission verdict
+function waitForAcceptedVerdict() {
+  if (isObserving) return;
+  isObserving = true;
+
+  let pollTimer = null;
+  let attempts = 0;
+  const maxAttempts = 60; // 30 seconds
+
+  const checkStatus = (observer) => {
+    if (hasCommitted) {
+      cleanup(observer);
+      return;
+    }
+
+    const bodyText = document.body ? (document.body.innerText || "") : "";
+
+    // Specific success elements
+    const successElement = document.querySelector(
+      '.congrats-heading, [data-analytics="SubmissionSuccess"], .submission-status-success, .challenge-response-success, .view-results-banner'
+    );
+
+    // Negative indicators: if still running or failed, do not trigger
+    const isProcessing = bodyText.includes("Processing...") || bodyText.includes("Compiling...") || bodyText.includes("Running tests...");
+    const hasFailed = bodyText.includes("Wrong Answer") || bodyText.includes("Compilation error") || bodyText.includes("Runtime Error");
+
+    const isSuccess =
+      !isProcessing &&
+      (
+        Boolean(successElement) ||
+        bodyText.includes("Congratulations!") ||
+        (bodyText.includes("Test Cases Passed") && !hasFailed) ||
+        bodyText.includes("All test cases passed") ||
+        bodyText.includes("Score: 100") ||
+        bodyText.includes("You have earned")
+      );
+
+    if (isSuccess && !hasCommitted) {
+      hasCommitted = true;
+      cleanup(observer);
+
+      // Refresh code one final time from bridge before dispatching
+      requestCodeFromBridge();
+      setTimeout(() => {
+        dispatchCommit();
+      }, 600);
+    }
+  };
+
+  const cleanup = (observer) => {
+    isObserving = false;
+    if (observer) observer.disconnect();
+    if (pollTimer) clearInterval(pollTimer);
+  };
+
+  // MutationObserver for instant trigger
+  const observer = new MutationObserver(() => {
+    checkStatus(observer);
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  // Polling fallback
+  pollTimer = setInterval(() => {
+    attempts++;
+    checkStatus(observer);
+    if (attempts >= maxAttempts) {
+      cleanup(observer);
+    }
+  }, 500);
+}
+
+// 5. Dispatch payload to background.js
+function dispatchCommit() {
+  // If bridge didn't yield code yet, try DOM fallback
+  if (!cachedCode || !cachedCode.trim()) {
+    fallbackExtractCode();
+  }
+
+  if (!cachedCode || !cachedCode.trim()) {
+    console.warn("[CodeSync] Aborted commit: No code captured in editor.");
     return;
   }
 
-  // B. Extract Problem Number & Title
-  const titleElement = document.querySelector('div[class*="text-title-large"] a, [data-cy="question-title"]');
-  let problemNumber = "0000";
-  let problemTitle = "Problem";
+  refineLanguageBySyntax();
 
-  if (titleElement) {
-    const rawTitle = titleElement.innerText.trim();
-    const splitIndex = rawTitle.indexOf(".");
-    if (splitIndex !== -1) {
-      problemNumber = rawTitle.slice(0, splitIndex).trim();
-      problemTitle = rawTitle.slice(splitIndex + 1).trim();
-    } else {
-      problemTitle = rawTitle;
-    }
+  // Extract challenge title
+  let problemTitle = "Challenge";
+  const titleEl = document.querySelector(
+    "[data-automation='challenge-name'], .ui-icon-label, h1.ui-heading, .challenge-title, h1"
+  );
+  if (titleEl && titleEl.innerText && titleEl.innerText.trim()) {
+    problemTitle = titleEl.innerText.trim();
   } else {
-    const urlMatches = window.location.pathname.match(/\/problems\/([^\/]+)/);
-    if (urlMatches && urlMatches[1]) {
-      problemTitle = urlMatches[1].replace(/-/g, "_");
+    const match = window.location.pathname.match(/challenges\/([^/?#]+)/);
+    if (match && match[1]) {
+      problemTitle = match[1].replace(/-/g, " ");
+      problemTitle = problemTitle.replace(/\b\w/g, (l) => l.toUpperCase());
     }
   }
 
-  // C. Extract Selected Language (Now safe to test 'code')
-  let extension = "txt";
-
-  // Check 1: Button text
-  const langSelectors = [
-    'button[id*="headlessui-listbox-button"]',
-    'button[data-state]',
-    'div[class*="rounded"] button'
-  ];
-
-  for (const selector of langSelectors) {
-    const btn = document.querySelector(selector);
-    if (btn) {
-      const text = btn.innerText.trim().toLowerCase();
-      for (const [langKey, ext] of Object.entries(EXTENSION_MAP)) {
-        if (text === langKey || text.startsWith(langKey + " ") || text.endsWith(" " + langKey)) {
-          extension = ext;
-          break;
-        }
-      }
-      if (extension !== "txt") break;
+  // Avoid rapid duplicate commits for the exact same problem
+  if (lastSyncedTitle === problemTitle) {
+    const elapsed = Date.now() - (dispatchCommit.lastTime || 0);
+    if (elapsed < 5000) {
+      return;
     }
   }
+  lastSyncedTitle = problemTitle;
+  dispatchCommit.lastTime = Date.now();
 
-  // Check 2: Monaco editor mode attribute
-  if (extension === "txt") {
-    const editor = document.querySelector(".monaco-editor");
-    const mode = editor?.getAttribute("data-mode-id");
-    if (mode && EXTENSION_MAP[mode.toLowerCase()]) {
-      extension = EXTENSION_MAP[mode.toLowerCase()];
-    } else {
-      // Check 3: Code syntax fallback
-      if (/def\s+\w+\(self/i.test(code)) extension = "py";
-      else if (/#include/i.test(code)) extension = "cpp";
-      else if (/public\s+class/i.test(code)) extension = "java";
-      else extension = "cpp";
-    }
-  }
-
-  // D. Dispatch to background.js safely
+  // Show immediate "Git committing..." loading pop-up message
   showSyncFlashToast({
     state: "loading",
     problemTitle: problemTitle
@@ -168,15 +281,19 @@ function extractAndDispatchSubmission() {
   chrome.runtime.sendMessage({
     type: "SUBMISSION_ACCEPTED",
     payload: {
-      platform: "LeetCode",
-      problemNumber: problemNumber,
+      platform: "HackerRank",
+      problemNumber: "",
       problemTitle: problemTitle,
-      languageExtension: extension,
-      code: code
+      languageExtension: cachedLang,
+      code: cachedCode
     }
   })
     .then(() => {
-      console.log(`[CodeSync] Submitted ${problemTitle} as .${extension}`);
+      const lineCount = cachedCode.split("\n").length;
+      console.log(
+        `%c[CodeSync] Successfully dispatched HackerRank: ${problemTitle}.${cachedLang} (${lineCount} lines, ${cachedCode.length} chars)`,
+        "color: #2da44e; font-weight: bold;"
+      );
     })
     .catch((err) => {
       console.warn("[CodeSync] Message delivery failed. Please reload the tab.", err);
@@ -188,7 +305,7 @@ function extractAndDispatchSubmission() {
     });
 }
 
-// 4. Listen for commit result from background.js and display animated flash pop toast
+// 6. Listen for commit result from background.js and display animated flash pop toast
 chrome.runtime.onMessage.addListener((message) => {
   if (message.type === "COMMIT_RESULT") {
     showSyncFlashToast(message);
@@ -407,3 +524,4 @@ function showSyncFlashToast(result) {
     codesyncToastTimer = setTimeout(dismiss, 4000);
   }
 }
+
