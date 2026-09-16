@@ -575,20 +575,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "TRIGGER_MANUAL_SYNC") {
-    requestCodeFromBridge();
-    detectLanguageFromUI();
-
-    setTimeout(() => {
-      if (!cachedCode || !cachedCode.trim()) {
-        fallbackExtractCode();
-      }
-      if (!cachedCode || !cachedCode.trim()) {
-        sendResponse({ success: false, error: "No code found in CodeChef editor." });
+    chrome.storage.sync.get(["autoSync"], (dataStored) => {
+      if (dataStored.autoSync === false) {
+        sendResponse({ success: false, error: "Auto-sync is turned off." });
         return;
       }
-      dispatchCommit(true);
-      sendResponse({ success: true });
-    }, 100);
+      requestCodeFromBridge();
+      detectLanguageFromUI();
+
+      setTimeout(() => {
+        if (!cachedCode || !cachedCode.trim()) {
+          fallbackExtractCode();
+        }
+        if (!cachedCode || !cachedCode.trim()) {
+          sendResponse({ success: false, error: "No code found in CodeChef editor." });
+          return;
+        }
+        dispatchCommit(true);
+        sendResponse({ success: true });
+      }, 100);
+    });
     return true;
   }
 
@@ -960,15 +966,21 @@ function injectManualSyncButton() {
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    requestCodeFromBridge();
-    detectLanguageFromUI();
-
-    setTimeout(() => {
-      if (!cachedCode || !cachedCode.trim()) {
-        fallbackExtractCode();
+    chrome.storage.sync.get(["autoSync"], (stored) => {
+      if (stored.autoSync === false) {
+        console.log("[CodeSync CC] Auto-sync is paused. Push disabled.");
+        return;
       }
-      dispatchCommit(true);
-    }, 120);
+      requestCodeFromBridge();
+      detectLanguageFromUI();
+
+      setTimeout(() => {
+        if (!cachedCode || !cachedCode.trim()) {
+          fallbackExtractCode();
+        }
+        dispatchCommit(true);
+      }, 120);
+    });
   });
 
   const nativeSubmit = findSubmitButton();
@@ -1001,10 +1013,11 @@ function findSubmitButton() {
   return null;
 }
 
-// Toggle in-editor button injection based on showInEditorBtn setting
+// Toggle in-editor button injection based on showInEditorBtn and autoSync setting
 function syncInEditorButtonVisibility() {
-  chrome.storage.sync.get(["showInEditorBtn"], (data) => {
-    const shouldShow = Boolean(data.showInEditorBtn);
+  chrome.storage.sync.get(["showInEditorBtn", "autoSync"], (data) => {
+    const isAutoSyncOn = data.autoSync !== false;
+    const shouldShow = Boolean(data.showInEditorBtn) && isAutoSyncOn;
     const existing = document.getElementById("codesync-manual-sync-btn");
     const floatingWrap = document.getElementById("codesync-floating-wrap");
 
@@ -1019,7 +1032,7 @@ function syncInEditorButtonVisibility() {
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.showInEditorBtn !== undefined) {
+  if (area === "sync" && (changes.showInEditorBtn !== undefined || changes.autoSync !== undefined)) {
     syncInEditorButtonVisibility();
   }
 });

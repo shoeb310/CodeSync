@@ -24,10 +24,11 @@ document.addEventListener("DOMContentLoaded", () => {
   const tabStatusPulse = document.getElementById("tabStatusPulse");
   const tabStatusText = document.getElementById("tabStatusText");
   const inEditorToggle = document.getElementById("inEditorToggle");
+  const featuresWrapper = document.getElementById("featuresWrapper");
 
   let activeTabInfo = null;
 
-  // Update Toggle UI styles
+  // Update Toggle UI styles and toggle all extension features
   function updateToggleUI(isEnabled) {
     syncToggle.checked = isEnabled;
     if (isEnabled) {
@@ -35,11 +36,51 @@ document.addEventListener("DOMContentLoaded", () => {
       statusDot.className = "status-dot on";
       statusText.className = "status-text on";
       statusText.innerText = "Active (Syncing)";
+
+      if (featuresWrapper) {
+        featuresWrapper.classList.remove("disabled");
+      }
+
+      ghTokenInput.disabled = false;
+      ghRepoInput.disabled = false;
+      toggleTokenVis.disabled = false;
+      saveBtn.disabled = false;
+      if (inEditorToggle) inEditorToggle.disabled = false;
+
+      historyHeader.setAttribute("tabindex", "0");
+      historyHeader.removeAttribute("aria-disabled");
+
+      // Re-evaluate active tab
+      checkActiveTab();
+
+      chrome.storage.local.get(["syncHistory"], (data) => {
+        const history = Array.isArray(data.syncHistory) ? data.syncHistory : [];
+        if (history.length > 0) {
+          clearHistoryBtn.disabled = false;
+        }
+      });
     } else {
       toggleCard.classList.remove("active");
       statusDot.className = "status-dot off";
       statusText.className = "status-text off";
       statusText.innerText = "Disabled (Paused)";
+
+      if (featuresWrapper) {
+        featuresWrapper.classList.add("disabled");
+      }
+
+      ghTokenInput.disabled = true;
+      ghRepoInput.disabled = true;
+      toggleTokenVis.disabled = true;
+      saveBtn.disabled = true;
+      if (inEditorToggle) inEditorToggle.disabled = true;
+      popupManualSyncBtn.disabled = true;
+      clearHistoryBtn.disabled = true;
+
+      historyHeader.setAttribute("tabindex", "-1");
+      historyHeader.setAttribute("aria-disabled", "true");
+
+      setManualSyncUnavailable("Extension is turned off");
     }
   }
 
@@ -56,6 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // In-Editor button toggle handler
   if (inEditorToggle) {
     inEditorToggle.addEventListener("change", () => {
+      if (!syncToggle.checked) return;
       const isShown = inEditorToggle.checked;
       chrome.storage.sync.set({ showInEditorBtn: isShown }, () => {
         showStatus(
@@ -81,6 +123,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Show/Hide password toggle for PAT
   toggleTokenVis.addEventListener("click", () => {
+    if (!syncToggle.checked) return;
     if (ghTokenInput.type === "password") {
       ghTokenInput.type = "text";
       toggleTokenVis.innerText = "Hide";
@@ -92,6 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Save changes when clicking the save button
   saveBtn.addEventListener("click", () => {
+    if (!syncToggle.checked) return;
     const token = ghTokenInput.value.trim();
     const repo = ghRepoInput.value.trim();
     const isEnabled = syncToggle.checked;
@@ -115,7 +159,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // --- Active Tab Detection & Manual Push to GitHub ---
   function checkActiveTab() {
+    if (!syncToggle.checked) {
+      setManualSyncUnavailable("Extension is turned off");
+      return;
+    }
+
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (!syncToggle.checked) {
+        setManualSyncUnavailable("Extension is turned off");
+        return;
+      }
       const tab = tabs && tabs[0];
       if (!tab || !tab.id) {
         setManualSyncUnavailable("No active tab found");
@@ -123,6 +176,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       chrome.tabs.sendMessage(tab.id, { type: "GET_PROBLEM_STATUS" }, (res) => {
+        if (!syncToggle.checked) {
+          setManualSyncUnavailable("Extension is turned off");
+          return;
+        }
         if (chrome.runtime.lastError || !res || !res.isProblemPage) {
           setManualSyncUnavailable("No coding problem detected on active tab");
         } else {
@@ -140,6 +197,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function setManualSyncAvailable(info) {
+    if (!syncToggle.checked) {
+      setManualSyncUnavailable("Extension is turned off");
+      return;
+    }
     popupManualSyncBtn.disabled = false;
     manualSyncCard.classList.add("ready");
     tabStatusPulse.className = "status-dot on";
@@ -157,11 +218,11 @@ document.addEventListener("DOMContentLoaded", () => {
     tabStatusPulse.className = "status-dot off";
     tabStatusText.className = "tab-status-text";
     tabStatusText.innerText = reason;
-    manualSyncBtnText.innerText = "Push Current Problem to GitHub";
+    manualSyncBtnText.innerText = (!syncToggle || !syncToggle.checked) ? "Extension Disabled" : "Push Current Problem to GitHub";
   }
 
   popupManualSyncBtn.addEventListener("click", () => {
-    if (!activeTabInfo || !activeTabInfo.tabId) return;
+    if (!syncToggle.checked || !activeTabInfo || !activeTabInfo.tabId) return;
 
     popupManualSyncBtn.disabled = true;
     popupManualSyncBtn.className = "manual-push-btn loading";
@@ -173,7 +234,10 @@ document.addEventListener("DOMContentLoaded", () => {
         manualSyncBtnText.innerText = (res && res.error) || "Push Failed";
         setTimeout(() => {
           popupManualSyncBtn.className = "manual-push-btn";
-          if (activeTabInfo) {
+          if (!syncToggle.checked) {
+            popupManualSyncBtn.disabled = true;
+            manualSyncBtnText.innerText = "Extension Disabled";
+          } else if (activeTabInfo) {
             popupManualSyncBtn.disabled = false;
             manualSyncBtnText.innerText = `Push to GitHub (${activeTabInfo.platform})`;
           } else {
@@ -186,7 +250,10 @@ document.addEventListener("DOMContentLoaded", () => {
         showStatus("Solution pushed to GitHub!", "#3fb950");
         setTimeout(() => {
           popupManualSyncBtn.className = "manual-push-btn";
-          if (activeTabInfo) {
+          if (!syncToggle.checked) {
+            popupManualSyncBtn.disabled = true;
+            manualSyncBtnText.innerText = "Extension Disabled";
+          } else if (activeTabInfo) {
             popupManualSyncBtn.disabled = false;
             manualSyncBtnText.innerText = `Push to GitHub (${activeTabInfo.platform})`;
           } else {
@@ -213,6 +280,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Toggle accordion expand/collapse
   historyHeader.addEventListener("click", (e) => {
+    if (!syncToggle.checked) return;
     if (e.target.closest("#clearHistoryBtn")) return;
     const isCurrentlyExpanded = historyCard.classList.contains("expanded");
     const nextState = !isCurrentlyExpanded;
@@ -222,6 +290,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   // Clear history button
   clearHistoryBtn.addEventListener("click", (e) => {
+    if (!syncToggle.checked) return;
     e.stopPropagation();
     chrome.storage.local.set({ syncHistory: [] }, () => {
       renderHistory([]);
@@ -323,6 +392,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const linkEl = itemEl.querySelector(".commit-link");
       linkEl.addEventListener("click", (e) => {
         e.preventDefault();
+        if (!syncToggle.checked) return;
         if (commitUrl && commitUrl !== "#") {
           chrome.tabs.create({ url: commitUrl });
         }

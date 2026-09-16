@@ -21,13 +21,19 @@ function notifyTab(sender, result) {
 
 async function commitToGitHub(payload, sender) {
   const config = await chrome.storage.sync.get(["autoSync", "ghToken", "ghRepo"]);
+  const { platform, problemNumber, problemTitle, languageExtension, code } = payload;
 
-  if (config.autoSync === false && !payload.isManual) {
+  if (config.autoSync === false) {
     console.log("[CodeSync] Auto-sync disabled. Skipping commit.");
+    notifyTab(sender, {
+      success: false,
+      error: "CodeSync auto-sync is turned off.",
+      platform,
+      problemTitle
+    });
     return;
   }
 
-  const { platform, problemNumber, problemTitle, languageExtension, code } = payload;
   showBadgeLoading();
 
   if (!code || !code.trim()) {

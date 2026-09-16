@@ -198,13 +198,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "TRIGGER_MANUAL_SYNC") {
-    const data = extractGfgData();
-    if (!data.code || !data.code.trim()) {
-      sendResponse({ success: false, error: "No code found in GFG editor." });
-      return true;
-    }
-    dispatchGfgSubmission(data, true);
-    sendResponse({ success: true });
+    chrome.storage.sync.get(["autoSync"], (dataStored) => {
+      if (dataStored.autoSync === false) {
+        sendResponse({ success: false, error: "Auto-sync is turned off." });
+        return;
+      }
+      const data = extractGfgData();
+      if (!data.code || !data.code.trim()) {
+        sendResponse({ success: false, error: "No code found in GFG editor." });
+        return;
+      }
+      dispatchGfgSubmission(data, true);
+      sendResponse({ success: true });
+    });
     return true;
   }
 
@@ -563,8 +569,14 @@ function injectManualSyncButton() {
   btn.addEventListener("click", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    const data = extractGfgData();
-    dispatchGfgSubmission(data, true);
+    chrome.storage.sync.get(["autoSync"], (stored) => {
+      if (stored.autoSync === false) {
+        console.log("[CodeSync GFG] Auto-sync is paused. Push disabled.");
+        return;
+      }
+      const data = extractGfgData();
+      dispatchGfgSubmission(data, true);
+    });
   });
 
   const nativeSubmit = findSubmitButton();
@@ -597,10 +609,11 @@ function findSubmitButton() {
   return null;
 }
 
-// Toggle in-editor button injection based on showInEditorBtn setting
+// Toggle in-editor button injection based on showInEditorBtn and autoSync setting
 function syncInEditorButtonVisibility() {
-  chrome.storage.sync.get(["showInEditorBtn"], (data) => {
-    const shouldShow = Boolean(data.showInEditorBtn);
+  chrome.storage.sync.get(["showInEditorBtn", "autoSync"], (data) => {
+    const isAutoSyncOn = data.autoSync !== false;
+    const shouldShow = Boolean(data.showInEditorBtn) && isAutoSyncOn;
     const existing = document.getElementById("codesync-manual-sync-btn");
     const floatingWrap = document.getElementById("codesync-floating-wrap");
 
@@ -615,7 +628,7 @@ function syncInEditorButtonVisibility() {
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.showInEditorBtn !== undefined) {
+  if (area === "sync" && (changes.showInEditorBtn !== undefined || changes.autoSync !== undefined)) {
     syncInEditorButtonVisibility();
   }
 });
