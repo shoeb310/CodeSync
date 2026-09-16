@@ -113,15 +113,34 @@ async function commitToGitHub(payload, sender) {
     });
 
     if (putRes.ok) {
+      const resData = await putRes.json().catch(() => null);
+      const commitSha = resData?.commit?.sha || "";
+      const commitUrl =
+        resData?.commit?.html_url ||
+        (commitSha ? `https://github.com/${config.ghRepo}/commit/${commitSha}` : `https://github.com/${config.ghRepo}`);
+
       console.log(`%c[CodeSync] Successfully committed: ${filePath}`, "color: #2da44e; font-weight: bold;");
       showBadgeSuccess();
+
+      await recordSyncHistory({
+        id: `${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        platform,
+        problemNumber: problemNumber ? problemNumber.toString().trim() : "",
+        problemTitle,
+        languageExtension: languageExtension || "",
+        commitUrl,
+        commitSha: commitSha ? commitSha.substring(0, 7) : "",
+        timestamp: Date.now()
+      });
+
       notifyTab(sender, {
         success: true,
         platform,
         problemTitle,
         fileName,
         filePath,
-        repo: config.ghRepo
+        repo: config.ghRepo,
+        commitUrl
       });
     } else {
       const errData = await putRes.json();
@@ -143,6 +162,22 @@ async function commitToGitHub(payload, sender) {
       platform,
       problemTitle
     });
+  }
+}
+
+// Stores the last 10 synced problems in chrome.storage.local
+async function recordSyncHistory(entry) {
+  try {
+    const data = await chrome.storage.local.get(["syncHistory"]);
+    const current = Array.isArray(data.syncHistory) ? data.syncHistory : [];
+    // Avoid exact duplicate commits if retried, otherwise prepend newest
+    const filtered = current.filter(
+      (item) => item.commitSha !== entry.commitSha || !entry.commitSha
+    );
+    const updated = [entry, ...filtered].slice(0, 10);
+    await chrome.storage.local.set({ syncHistory: updated });
+  } catch (err) {
+    console.error("[CodeSync] Failed to save sync history:", err);
   }
 }
 
