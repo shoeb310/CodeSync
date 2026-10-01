@@ -46,6 +46,23 @@ const EXTENSION_MAP = {
 };
 
 let isSubmitting = false;
+let cachedCode = "";
+let cachedLang = "";
+
+// 0. Listen for full code buffer broadcasted from leetcode-bridge.js (MAIN world)
+window.addEventListener("CodeSync_LeetCode_Data", (e) => {
+  if (e.detail && e.detail.code && e.detail.code.trim()) {
+    cachedCode = e.detail.code;
+    if (e.detail.language) {
+      cachedLang = e.detail.language;
+    }
+    console.debug(`[CodeSync LeetCode] Received complete code buffer (${cachedCode.split("\n").length} lines, ${cachedCode.length} chars)`);
+  }
+});
+
+function requestCodeFromBridge() {
+  window.dispatchEvent(new CustomEvent("CodeSync_Request_LeetCode_Code"));
+}
 
 // 1. Listen for clicks on the Submit button
 document.addEventListener("click", (e) => {
@@ -53,7 +70,15 @@ document.addEventListener("click", (e) => {
   if (target && target.id === "codesync-manual-sync-btn") return;
   if (target && target.innerText.trim().toLowerCase().includes("submit")) {
     isSubmitting = true;
+    requestCodeFromBridge();
     waitForAcceptedVerdict();
+  }
+});
+
+// Listen for keyboard shortcut (Ctrl+Enter / Cmd+Enter)
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    requestCodeFromBridge();
   }
 });
 
@@ -70,6 +95,7 @@ function waitForAcceptedVerdict() {
       isSubmitting = false;
       obs.disconnect(); // Stop observing to prevent duplicate calls
 
+      requestCodeFromBridge();
       // Wait 800ms for submission details and code layout to settle
       setTimeout(extractAndDispatchSubmission, 800);
     }
@@ -86,12 +112,30 @@ function waitForAcceptedVerdict() {
 
 // 3. Extract metadata, code, and language
 function extractSubmissionData() {
-  let code = "";
-  const codeLines = document.querySelectorAll(".monaco-editor .view-line");
-  if (codeLines.length > 0) {
-    code = Array.from(codeLines)
-      .map((line) => line.textContent)
-      .join("\n");
+  requestCodeFromBridge();
+
+  // 1. Primary: Use full, untruncated code buffer from bridge (Monaco models / submit intercept)
+  let code = (cachedCode && cachedCode.trim()) ? cachedCode : "";
+
+  // 2. Fallback: Virtual DOM lines only if bridge hasn't supplied code yet
+  if (!code) {
+    const codeLines = document.querySelectorAll(".monaco-editor .view-line");
+    if (codeLines.length > 0) {
+      code = Array.from(codeLines)
+        .map((line) => line.textContent)
+        .join("\n");
+    }
+  }
+
+  // 3. Fallback: Textareas
+  if (!code) {
+    const textareas = document.querySelectorAll("textarea.inputarea, .monaco-editor textarea, textarea");
+    for (const ta of textareas) {
+      if (ta.value && ta.value.trim().length > 0) {
+        code = ta.value;
+        break;
+      }
+    }
   }
 
   const titleElement = document.querySelector('div[class*="text-title-large"] a, [data-cy="question-title"]');
@@ -115,23 +159,42 @@ function extractSubmissionData() {
   }
 
   let extension = "txt";
-  const langSelectors = [
-    'button[id*="headlessui-listbox-button"]',
-    'button[data-state]',
-    'div[class*="rounded"] button'
-  ];
 
-  for (const selector of langSelectors) {
-    const btn = document.querySelector(selector);
-    if (btn) {
-      const text = btn.innerText.trim().toLowerCase();
+  // Check 0: Language reported by Monaco or submit payload in bridge
+  if (cachedLang) {
+    const cleaned = cachedLang.trim().toLowerCase();
+    if (EXTENSION_MAP[cleaned]) {
+      extension = EXTENSION_MAP[cleaned];
+    } else {
       for (const [langKey, ext] of Object.entries(EXTENSION_MAP)) {
-        if (text === langKey || text.startsWith(langKey + " ") || text.endsWith(" " + langKey)) {
+        if (cleaned === langKey || cleaned.startsWith(langKey) || cleaned.includes(langKey)) {
           extension = ext;
           break;
         }
       }
-      if (extension !== "txt") break;
+    }
+  }
+
+  // Check 1: Button text
+  if (extension === "txt") {
+    const langSelectors = [
+      'button[id*="headlessui-listbox-button"]',
+      'button[data-state]',
+      'div[class*="rounded"] button'
+    ];
+
+    for (const selector of langSelectors) {
+      const btn = document.querySelector(selector);
+      if (btn) {
+        const text = btn.innerText.trim().toLowerCase();
+        for (const [langKey, ext] of Object.entries(EXTENSION_MAP)) {
+          if (text === langKey || text.startsWith(langKey + " ") || text.endsWith(" " + langKey)) {
+            extension = ext;
+            break;
+          }
+        }
+        if (extension !== "txt") break;
+      }
     }
   }
 
@@ -234,13 +297,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: "Auto-sync is turned off." });
         return;
       }
-      const data = extractSubmissionData();
-      if (!data.code || !data.code.trim()) {
-        sendResponse({ success: false, error: "No code found in editor." });
-        return;
-      }
-      dispatchSubmission(data, true);
-      sendResponse({ success: true });
+      requestCodeFromBridge();
+      setTimeout(() => {
+        const data = extractSubmissionData();
+        if (!data.code || !data.code.trim()) {
+          sendResponse({ success: false, error: "No code found in editor." });
+          return;
+        }
+        dispatchSubmission(data, true);
+        sendResponse({ success: true });
+      }, 50);
     });
     return true;
   }
@@ -606,8 +672,11 @@ function injectManualSyncButton() {
         console.log("[CodeSync] Auto-sync is paused. Push disabled.");
         return;
       }
-      const data = extractSubmissionData();
-      dispatchSubmission(data, true);
+      requestCodeFromBridge();
+      setTimeout(() => {
+        const data = extractSubmissionData();
+        dispatchSubmission(data, true);
+      }, 50);
     });
   });
 

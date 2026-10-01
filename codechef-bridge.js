@@ -162,10 +162,34 @@
   }
 
   // 4. Inspect response body for verdicts
-  function inspectResponseText(text) {
+  function inspectResponseText(text, url = "") {
     if (!text || text.length > 500000) return;
+
+    const lowerUrl = (url || "").toLowerCase();
+    if (
+      lowerUrl.includes("/submissions") ||
+      lowerUrl.includes("submission-history") ||
+      lowerUrl.includes("all-submissions") ||
+      lowerUrl.includes("user-submissions") ||
+      lowerUrl.includes("viewsolution")
+    ) {
+      return;
+    }
+
     try {
       const data = JSON.parse(text);
+
+      // Ignore history lists/arrays
+      if (
+        Array.isArray(data) ||
+        Array.isArray(data?.data) ||
+        Array.isArray(data?.submissions) ||
+        Array.isArray(data?.rows) ||
+        Array.isArray(data?.list)
+      ) {
+        return;
+      }
+
       const str = JSON.stringify(data).toLowerCase();
 
       // Negative checks
@@ -228,8 +252,9 @@
       const res = await originalFetch.apply(this, args);
 
       try {
+        const reqUrl = typeof args[0] === "string" ? args[0] : (args[0]?.url || "");
         const clone = res.clone();
-        clone.text().then(inspectResponseText).catch(() => {});
+        clone.text().then((txt) => inspectResponseText(txt, reqUrl)).catch(() => {});
       } catch (_) {}
 
       return res;
@@ -242,15 +267,16 @@
   try {
     const originalXhrSend = window.XMLHttpRequest.prototype.send;
     window.XMLHttpRequest.prototype.send = function (body) {
+      const reqUrl = this._codesync_url || "";
       try {
-        inspectAndCapturePayload(body, this._codesync_url || "");
+        inspectAndCapturePayload(body, reqUrl);
       } catch (_) {}
 
       try {
         this.addEventListener("load", function () {
           try {
             if (this.responseText) {
-              inspectResponseText(this.responseText);
+              inspectResponseText(this.responseText, reqUrl);
             }
           } catch (_) {}
         });
@@ -284,8 +310,27 @@
     (e) => {
       const btn = e.target.closest("button, a, [role='button'], input[type='submit']");
       if (!btn) return;
+      if (btn.getAttribute("role") === "tab" || btn.closest("[role='tablist'], .tabs, nav, table")) return;
+
       const text = (btn.innerText || btn.textContent || btn.value || "").trim().toLowerCase();
-      if (text.includes("submit") || text.includes("run")) {
+      // Explicitly ignore navigation to Submissions history
+      if (
+        text.includes("submissions") ||
+        text.includes("my submission") ||
+        text.includes("all submission") ||
+        text.includes("view submission")
+      ) {
+        return;
+      }
+
+      if (
+        text === "submit" ||
+        text === "submit code" ||
+        text === "run" ||
+        text === "run code" ||
+        text.startsWith("submit ") ||
+        text.endsWith(" submit")
+      ) {
         const extracted = extractFromEditors();
         if (extracted.code) {
           broadcast(extracted.code, extracted.lang, "click-submit");

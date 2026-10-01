@@ -12,6 +12,23 @@ const GFG_LANG_MAP = {
 
 let isSubmitting = false;
 let lastSyncedProblem = "";
+let cachedCode = "";
+let cachedLang = "";
+
+// 0. Listen for complete code buffer broadcasted from gfg-bridge.js (MAIN world)
+window.addEventListener("CodeSync_GFG_Data", (e) => {
+  if (e.detail && e.detail.code && e.detail.code.trim()) {
+    cachedCode = e.detail.code;
+    if (e.detail.language) {
+      cachedLang = e.detail.language;
+    }
+    console.debug(`[CodeSync GFG] Received complete code buffer (${cachedCode.split("\n").length} lines, ${cachedCode.length} chars)`);
+  }
+});
+
+function requestCodeFromBridge() {
+  window.dispatchEvent(new CustomEvent("CodeSync_Request_GFG_Code"));
+}
 
 // 1. Listen for the Submit button click
 document.addEventListener("click", (e) => {
@@ -19,7 +36,15 @@ document.addEventListener("click", (e) => {
   if (btn && btn.id === "codesync-manual-sync-btn") return;
   if (btn && btn.innerText.toLowerCase().includes("submit")) {
     isSubmitting = true;
+    requestCodeFromBridge();
     waitForGfgVerdict();
+  }
+});
+
+// Listen for keyboard shortcut (Ctrl+Enter / Cmd+Enter)
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+    requestCodeFromBridge();
   }
 });
 
@@ -40,6 +65,7 @@ function waitForGfgVerdict() {
       isSubmitting = false;
       obs.disconnect();
 
+      requestCodeFromBridge();
       setTimeout(extractAndDispatchGFG, 1000);
     }
   });
@@ -54,6 +80,8 @@ function waitForGfgVerdict() {
 
 // 3. Extract problem metadata, code, and language
 function extractGfgData() {
+  requestCodeFromBridge();
+
   // A. Extract Problem Title & Slug
   const titleEl = document.querySelector(
     '[class*="problem-tab__name"], [class*="g-m-0"], .g-title, h3'
@@ -67,39 +95,68 @@ function extractGfgData() {
     if (urlMatch) problemTitle = urlMatch[1];
   }
 
-  // B. Extract Code
-  let code = "";
-  const aceLines = document.querySelectorAll(".ace_line");
-  if (aceLines.length > 0) {
-    code = Array.from(aceLines).map((el) => el.textContent).join("\n");
+  // B. Extract Code (prioritize complete untruncated buffer from bridge)
+  let code = (cachedCode && cachedCode.trim()) ? cachedCode : "";
+
+  // Fallback to DOM virtual lines only if bridge hasn't supplied code yet
+  if (!code) {
+    const aceLines = document.querySelectorAll(".ace_line");
+    if (aceLines.length > 0) {
+      code = Array.from(aceLines).map((el) => el.textContent).join("\n");
+    }
   }
 
-  if (!code.trim()) {
+  if (!code) {
     const monacoLines = document.querySelectorAll(".monaco-editor .view-line");
     if (monacoLines.length > 0) {
       code = Array.from(monacoLines).map((el) => el.textContent).join("\n");
     }
   }
 
+  // Fallback to textareas
+  if (!code) {
+    const textareas = document.querySelectorAll("textarea.inputarea, .monaco-editor textarea, textarea");
+    for (const ta of textareas) {
+      if (ta.value && ta.value.trim().length > 0) {
+        code = ta.value;
+        break;
+      }
+    }
+  }
+
   // C. Extract Selected Language
   let extension = "cpp"; // default fallback
 
-  const langElements = [
-    document.querySelector('[class*="select-language"]'),
-    document.querySelector('[class*="divider-left"]'),
-    document.querySelector('button[aria-haspopup="listbox"]'),
-    document.querySelector('[class*="dropdown-toggle"]')
-  ];
+  if (cachedLang) {
+    const cleaned = cachedLang.trim().toLowerCase();
+    if (GFG_LANG_MAP[cleaned]) {
+      extension = GFG_LANG_MAP[cleaned];
+    } else {
+      for (const [langKey, ext] of Object.entries(GFG_LANG_MAP)) {
+        if (cleaned.includes(langKey)) {
+          extension = ext;
+          break;
+        }
+      }
+    }
+  } else {
+    const langElements = [
+      document.querySelector('[class*="select-language"]'),
+      document.querySelector('[class*="divider-left"]'),
+      document.querySelector('button[aria-haspopup="listbox"]'),
+      document.querySelector('[class*="dropdown-toggle"]')
+    ];
 
-  for (const el of langElements) {
-    if (el) {
-      const text = el.innerText.trim().toLowerCase();
-      if (text.includes("c++") || text.includes("cpp")) { extension = "cpp"; break; }
-      if (text.includes("java")) { extension = "java"; break; }
-      if (text.includes("python")) { extension = "py"; break; }
-      if (text.includes("c#")) { extension = "cs"; break; }
-      if (text.includes("javascript")) { extension = "js"; break; }
-      if (text.includes("c") && !text.includes("c++")) { extension = "c"; break; }
+    for (const el of langElements) {
+      if (el) {
+        const text = el.innerText.trim().toLowerCase();
+        if (text.includes("c++") || text.includes("cpp")) { extension = "cpp"; break; }
+        if (text.includes("java")) { extension = "java"; break; }
+        if (text.includes("python")) { extension = "py"; break; }
+        if (text.includes("c#")) { extension = "cs"; break; }
+        if (text.includes("javascript")) { extension = "js"; break; }
+        if (text.includes("c") && !text.includes("c++")) { extension = "c"; break; }
+      }
     }
   }
 
@@ -203,13 +260,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: "Auto-sync is turned off." });
         return;
       }
-      const data = extractGfgData();
-      if (!data.code || !data.code.trim()) {
-        sendResponse({ success: false, error: "No code found in GFG editor." });
-        return;
-      }
-      dispatchGfgSubmission(data, true);
-      sendResponse({ success: true });
+      requestCodeFromBridge();
+      setTimeout(() => {
+        const data = extractGfgData();
+        if (!data.code || !data.code.trim()) {
+          sendResponse({ success: false, error: "No code found in GFG editor." });
+          return;
+        }
+        dispatchGfgSubmission(data, true);
+        sendResponse({ success: true });
+      }, 50);
     });
     return true;
   }
@@ -574,8 +634,11 @@ function injectManualSyncButton() {
         console.log("[CodeSync GFG] Auto-sync is paused. Push disabled.");
         return;
       }
-      const data = extractGfgData();
-      dispatchGfgSubmission(data, true);
+      requestCodeFromBridge();
+      setTimeout(() => {
+        const data = extractGfgData();
+        dispatchGfgSubmission(data, true);
+      }, 50);
     });
   });
 

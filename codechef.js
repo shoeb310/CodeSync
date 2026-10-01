@@ -46,6 +46,7 @@ let cachedLang = "cpp";
 let hasCommitted = false;
 let isSubmitting = false;
 let lastSyncedProblem = "";
+let lastSyncedCode = "";
 let verdictPollTimer = null;
 let verdictObserver = null;
 
@@ -78,6 +79,7 @@ window.addEventListener("CodeSync_CodeChef_Submit_Started", (e) => {
 });
 
 window.addEventListener("CodeSync_CodeChef_Verdict_Success", () => {
+  if (!isSubmitting) return;
   onVerdictSuccess("network-verdict");
 });
 
@@ -87,6 +89,12 @@ function requestCodeFromBridge() {
 
 // 2. Submission Initiated Handler
 function onSubmissionInitiated(source = "ui") {
+  // If on a historical submissions page or viewsolution page, do not auto-initiate
+  const path = window.location.pathname.toLowerCase();
+  if (path.includes("/viewsolution") || path.endsWith("/submissions")) {
+    return;
+  }
+
   hasCommitted = false;
   isSubmitting = true;
   requestCodeFromBridge();
@@ -101,19 +109,43 @@ document.addEventListener(
     const el = e.target.closest("button, a, [role='button'], input[type='submit'], [class*='submit'], [id*='submit']");
     if (!el || el.id === "codesync-manual-sync-btn") return;
 
+    // Ignore tabs, navigation links, breadcrumbs, or elements inside submissions tables
+    if (
+      el.getAttribute("role") === "tab" ||
+      el.closest("[role='tablist'], .tabs, nav, .breadcrumbs, [class*='submissions-list'], table, thead, tbody, tr, td")
+    ) {
+      return;
+    }
+
     const text = (el.innerText || el.textContent || el.value || "").trim().toLowerCase();
+    // Explicitly ignore tabs/buttons for viewing past submissions
+    if (
+      text.includes("submissions") ||
+      text.includes("my submission") ||
+      text.includes("all submission") ||
+      text.includes("previous submission") ||
+      text.includes("view submission")
+    ) {
+      return;
+    }
+
     const id = (el.id || "").toLowerCase();
     const aria = (el.getAttribute("aria-label") || "").toLowerCase();
     const testId = (el.getAttribute("data-testid") || "").toLowerCase();
-    const cls = (typeof el.className === "string" ? el.className : "").toLowerCase();
 
-    if (
-      text.includes("submit") ||
-      id.includes("submit") ||
-      aria.includes("submit") ||
-      testId.includes("submit") ||
-      cls.includes("submit")
-    ) {
+    const isSubmitButton =
+      text === "submit" ||
+      text === "submit code" ||
+      text === "run" ||
+      text === "run code" ||
+      text.startsWith("submit ") ||
+      aria === "submit" ||
+      aria === "submit code" ||
+      testId === "submit-button" ||
+      id === "submit-button" ||
+      id === "submit";
+
+    if (isSubmitButton) {
       onSubmissionInitiated("click");
     }
   },
@@ -254,12 +286,24 @@ function stopVerdictWatcher() {
 }
 
 function evaluateVerdict() {
+  if (!isSubmitting) return false;
+
+  const path = window.location.pathname.toLowerCase();
+  if (path.includes("/viewsolution") || path.endsWith("/submissions")) {
+    return false;
+  }
+
   // 1. Scoped check inside submission/verdict containers
   const containers = document.querySelectorAll(
     '[class*="submission"], [class*="result"], [class*="verdict"], [class*="status"], [class*="modal"], [role="dialog"], [class*="drawer"], [class*="pane"], [class*="output"]'
   );
 
   for (const c of containers) {
+    // Skip historical submission tables
+    if (c.closest("table, [class*='submissions-list'], [class*='submission-table']")) {
+      continue;
+    }
+
     const text = (c.innerText || c.textContent || "").trim();
     if (!text) continue;
 
@@ -282,6 +326,7 @@ function evaluateVerdict() {
       text.includes("Compilation Error")
     ) {
       stopVerdictWatcher();
+      isSubmitting = false;
       return false;
     }
 
@@ -315,7 +360,7 @@ function evaluateVerdict() {
     if (el.children.length <= 1) {
       const text = (el.innerText || el.textContent || "").trim();
       if (text === "Accepted" || text === "Correct Answer") {
-        if (!el.closest("header, nav, footer, aside, .breadcrumbs")) {
+        if (!el.closest("header, nav, footer, aside, .breadcrumbs, table, [class*='submissions-list']")) {
           return true;
         }
       }
@@ -326,6 +371,7 @@ function evaluateVerdict() {
 }
 
 function onVerdictSuccess(source = "unknown") {
+  if (!isSubmitting) return;
   if (hasCommitted) return;
   hasCommitted = true;
   isSubmitting = false;
@@ -487,13 +533,20 @@ function dispatchCommit(isManual = false) {
 
   refineLanguageBySyntax();
 
-  // Avoid rapid duplicate commits
+  // Avoid duplicate commits: if same problem AND same code was already synced, skip auto-sync
   const currentKey = `${problemCode}_${problemTitle}`;
+  const isSameCode = cachedCode && lastSyncedCode === cachedCode.trim();
+  if (!isManual && lastSyncedProblem === currentKey && isSameCode) {
+    console.log("[CodeSync CodeChef] Skipping duplicate commit for identical code.");
+    return;
+  }
+
   if (!isManual && lastSyncedProblem === currentKey) {
     const elapsed = Date.now() - (dispatchCommit.lastTime || 0);
-    if (elapsed < 5000) return;
+    if (elapsed < 15000) return;
   }
   lastSyncedProblem = currentKey;
+  lastSyncedCode = cachedCode.trim();
   dispatchCommit.lastTime = Date.now();
 
   const sendCommitMessage = () => {
